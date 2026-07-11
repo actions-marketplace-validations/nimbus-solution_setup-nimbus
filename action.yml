@@ -32,10 +32,17 @@ runs:
 
         VERSION="${{ inputs.version }}"
         if [ "$VERSION" = "latest" ]; then
-          VERSION="$($CURL https://api.github.com/repos/nimbus-solution/nimbus/releases/latest \
-            | grep -m1 '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')"
+          # Buffer the whole API response first, THEN parse it. Piping curl
+          # straight into `grep -m1` lets grep close the pipe on the first
+          # match, which SIGPIPEs curl mid-write → curl exit 23 under pipefail.
+          RELEASE_JSON="$($CURL https://api.github.com/repos/nimbus-solution/nimbus/releases/latest)"
+          VERSION="$(printf '%s\n' "$RELEASE_JSON" | grep -m1 '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')"
         fi
         VERSION="${VERSION#v}"
+        if [ -z "$VERSION" ]; then
+          echo "Could not determine Nimbus version to install." >&2
+          exit 1
+        fi
 
         case "$RUNNER_OS" in
           Linux)  OS=linux ;;
