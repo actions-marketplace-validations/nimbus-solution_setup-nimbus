@@ -26,9 +26,13 @@ runs:
       run: |
         set -euo pipefail
 
+        # Transient network/write hiccups on hosted runners are common; retry
+        # every fetch rather than fail the whole job on a single blip.
+        CURL="curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 30"
+
         VERSION="${{ inputs.version }}"
         if [ "$VERSION" = "latest" ]; then
-          VERSION="$(curl -fsSL https://api.github.com/repos/nimbus-solution/nimbus/releases/latest \
+          VERSION="$($CURL https://api.github.com/repos/nimbus-solution/nimbus/releases/latest \
             | grep -m1 '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')"
         fi
         VERSION="${VERSION#v}"
@@ -49,8 +53,8 @@ runs:
         mkdir -p "$DEST"
 
         echo "Downloading nimbus v${VERSION} (${OS}/${ARCH})..."
-        curl -fsSL -o "$DEST/$ASSET" "$BASE/$ASSET"
-        curl -fsSL -o "$DEST/checksums.txt" "$BASE/checksums.txt"
+        $CURL -o "$DEST/$ASSET" "$BASE/$ASSET"
+        $CURL -o "$DEST/checksums.txt" "$BASE/checksums.txt"
 
         cd "$DEST"
         if command -v sha256sum >/dev/null 2>&1; then
@@ -74,7 +78,7 @@ runs:
 
         $Version = '${{ inputs.version }}'
         if ($Version -eq 'latest') {
-          $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/nimbus-solution/nimbus/releases/latest'
+          $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/nimbus-solution/nimbus/releases/latest' -MaximumRetryCount 5 -RetryIntervalSec 2
           $Version = $release.tag_name
         }
         $Version = $Version.TrimStart('v')
@@ -86,8 +90,8 @@ runs:
         New-Item -ItemType Directory -Force -Path $Dest | Out-Null
 
         Write-Host "Downloading nimbus v${Version} (windows/${Arch})..."
-        Invoke-WebRequest -Uri "$Base/$Asset" -OutFile (Join-Path $Dest $Asset)
-        Invoke-WebRequest -Uri "$Base/checksums.txt" -OutFile (Join-Path $Dest 'checksums.txt')
+        Invoke-WebRequest -Uri "$Base/$Asset" -OutFile (Join-Path $Dest $Asset) -MaximumRetryCount 5 -RetryIntervalSec 2
+        Invoke-WebRequest -Uri "$Base/checksums.txt" -OutFile (Join-Path $Dest 'checksums.txt') -MaximumRetryCount 5 -RetryIntervalSec 2
 
         $expected = (Select-String -Path (Join-Path $Dest 'checksums.txt') -Pattern ([regex]::Escape($Asset))).Line.Split(' ')[0]
         $actual = (Get-FileHash -Algorithm SHA256 -Path (Join-Path $Dest $Asset)).Hash.ToLower()
