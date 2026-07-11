@@ -1,0 +1,102 @@
+name: 'Setup Nimbus'
+description: 'Install the Nimbus CLI — run Salesforce Apex tests locally in CI. No org, no scratch-org pool, no Docker, no JVM.'
+author: 'Nimbus Solutions'
+branding:
+  icon: 'cloud-lightning'
+  color: 'gray-dark'
+
+inputs:
+  version:
+    description: 'Nimbus version to install (e.g. "1.1.12"), or "latest".'
+    required: false
+    default: 'latest'
+
+outputs:
+  version:
+    description: 'The Nimbus version that was installed.'
+    value: ${{ steps.install.outputs.version || steps.install-windows.outputs.version }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Nimbus (Linux/macOS)
+      id: install
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        VERSION="${{ inputs.version }}"
+        if [ "$VERSION" = "latest" ]; then
+          VERSION="$(curl -fsSL https://api.github.com/repos/nimbus-solution/nimbus/releases/latest \
+            | grep -m1 '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')"
+        fi
+        VERSION="${VERSION#v}"
+
+        case "$RUNNER_OS" in
+          Linux)  OS=linux ;;
+          macOS)  OS=darwin ;;
+        esac
+        case "$RUNNER_ARCH" in
+          X64)   ARCH=amd64 ;;
+          ARM64) ARCH=arm64 ;;
+          *) echo "Unsupported architecture: $RUNNER_ARCH" >&2; exit 1 ;;
+        esac
+
+        ASSET="nimbus_${VERSION}_${OS}_${ARCH}.tar.gz"
+        BASE="https://github.com/nimbus-solution/nimbus/releases/download/v${VERSION}"
+        DEST="$RUNNER_TEMP/nimbus-${VERSION}"
+        mkdir -p "$DEST"
+
+        echo "Downloading nimbus v${VERSION} (${OS}/${ARCH})..."
+        curl -fsSL -o "$DEST/$ASSET" "$BASE/$ASSET"
+        curl -fsSL -o "$DEST/checksums.txt" "$BASE/checksums.txt"
+
+        cd "$DEST"
+        if command -v sha256sum >/dev/null 2>&1; then
+          grep " ${ASSET}\$" checksums.txt | sha256sum -c -
+        else
+          grep " ${ASSET}\$" checksums.txt | shasum -a 256 -c -
+        fi
+
+        tar -xzf "$ASSET"
+        chmod +x nimbus
+        echo "$DEST" >> "$GITHUB_PATH"
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "Installed: $("$DEST/nimbus" --version)"
+
+    - name: Install Nimbus (Windows)
+      id: install-windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        $Version = '${{ inputs.version }}'
+        if ($Version -eq 'latest') {
+          $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/nimbus-solution/nimbus/releases/latest'
+          $Version = $release.tag_name
+        }
+        $Version = $Version.TrimStart('v')
+
+        $Arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'amd64' }
+        $Asset = "nimbus_${Version}_windows_${Arch}.zip"
+        $Base = "https://github.com/nimbus-solution/nimbus/releases/download/v${Version}"
+        $Dest = Join-Path $env:RUNNER_TEMP "nimbus-${Version}"
+        New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+
+        Write-Host "Downloading nimbus v${Version} (windows/${Arch})..."
+        Invoke-WebRequest -Uri "$Base/$Asset" -OutFile (Join-Path $Dest $Asset)
+        Invoke-WebRequest -Uri "$Base/checksums.txt" -OutFile (Join-Path $Dest 'checksums.txt')
+
+        $expected = (Select-String -Path (Join-Path $Dest 'checksums.txt') -Pattern ([regex]::Escape($Asset))).Line.Split(' ')[0]
+        $actual = (Get-FileHash -Algorithm SHA256 -Path (Join-Path $Dest $Asset)).Hash.ToLower()
+        if ($expected -ne $actual) {
+          Write-Error "Checksum mismatch for ${Asset}: expected $expected, got $actual"
+          exit 1
+        }
+
+        Expand-Archive -Path (Join-Path $Dest $Asset) -DestinationPath $Dest -Force
+        Add-Content -Path $env:GITHUB_PATH -Value $Dest
+        Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$Version"
+        & (Join-Path $Dest 'nimbus.exe') --version
