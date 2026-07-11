@@ -32,15 +32,17 @@ runs:
 
         VERSION="${{ inputs.version }}"
         if [ "$VERSION" = "latest" ]; then
-          # Buffer the whole API response first, THEN parse it. Piping curl
-          # straight into `grep -m1` lets grep close the pipe on the first
-          # match, which SIGPIPEs curl mid-write → curl exit 23 under pipefail.
-          RELEASE_JSON="$($CURL https://api.github.com/repos/nimbus-solution/nimbus/releases/latest)"
-          VERSION="$(printf '%s\n' "$RELEASE_JSON" | grep -m1 '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')"
+          # Resolve "latest" from the github.com release redirect, NOT the
+          # api.github.com REST endpoint. Unauthenticated API calls are rate
+          # limited to 60/hr per IP and routinely 403 from shared runner
+          # egress IPs (macOS especially). The redirect has no such limit.
+          LATEST_URL="$($CURL -o /dev/null -w '%{url_effective}' \
+            https://github.com/nimbus-solution/nimbus/releases/latest)"
+          VERSION="${LATEST_URL##*/tag/}"
         fi
         VERSION="${VERSION#v}"
-        if [ -z "$VERSION" ]; then
-          echo "Could not determine Nimbus version to install." >&2
+        if [ -z "$VERSION" ] || [ "$VERSION" != "${VERSION#*/}" ]; then
+          echo "Could not resolve Nimbus version (got '$VERSION')." >&2
           exit 1
         fi
 
@@ -85,10 +87,17 @@ runs:
 
         $Version = '${{ inputs.version }}'
         if ($Version -eq 'latest') {
-          $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/nimbus-solution/nimbus/releases/latest' -MaximumRetryCount 5 -RetryIntervalSec 2
-          $Version = $release.tag_name
+          # Resolve "latest" from the github.com release redirect rather than
+          # the rate-limited api.github.com REST endpoint (see the bash step).
+          $resp = Invoke-WebRequest -Uri 'https://github.com/nimbus-solution/nimbus/releases/latest' -MaximumRetryCount 5 -RetryIntervalSec 2
+          $finalUri = $resp.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
+          $Version = ($finalUri -split '/tag/')[-1]
         }
         $Version = $Version.TrimStart('v')
+        if (-not $Version -or $Version -match '/') {
+          Write-Error "Could not resolve Nimbus version (got '$Version')."
+          exit 1
+        }
 
         $Arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'amd64' }
         $Asset = "nimbus_${Version}_windows_${Arch}.zip"
