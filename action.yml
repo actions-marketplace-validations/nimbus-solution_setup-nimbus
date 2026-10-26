@@ -1,25 +1,25 @@
-name: 'Setup Nimbus'
-description: 'Install the Nimbus CLI — run Salesforce Apex tests locally in CI. No org, no scratch-org pool, no Docker, no JVM.'
-author: 'Nimbus Solutions'
+name: 'Setup Renmy'
+description: 'Install the Renmy CLI — run Salesforce Apex tests locally in CI. No org, no scratch-org pool, no Docker, no JVM. Puts both renmy and nimbus on PATH.'
+author: 'Renmy'
 branding:
   icon: 'cloud-lightning'
   color: 'gray-dark'
 
 inputs:
   version:
-    description: 'Nimbus version to install (e.g. "1.1.12"), or "latest".'
+    description: 'Renmy version to install (e.g. "1.1.12"), or "latest".'
     required: false
     default: 'latest'
 
 outputs:
   version:
-    description: 'The Nimbus version that was installed.'
+    description: 'The Renmy version that was installed.'
     value: ${{ steps.install.outputs.version || steps.install-windows.outputs.version }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Install Nimbus (Linux/macOS)
+    - name: Install Renmy (Linux/macOS)
       id: install
       if: runner.os != 'Windows'
       shell: bash
@@ -37,12 +37,12 @@ runs:
           # limited to 60/hr per IP and routinely 403 from shared runner
           # egress IPs (macOS especially). The redirect has no such limit.
           LATEST_URL="$($CURL -o /dev/null -w '%{url_effective}' \
-            https://github.com/nimbus-solution/nimbus/releases/latest)"
+            https://github.com/renmy-solutions/renmy/releases/latest)"
           VERSION="${LATEST_URL##*/tag/}"
         fi
         VERSION="${VERSION#v}"
         if [ -z "$VERSION" ] || [ "$VERSION" != "${VERSION#*/}" ]; then
-          echo "Could not resolve Nimbus version (got '$VERSION')." >&2
+          echo "Could not resolve Renmy version (got '$VERSION')." >&2
           exit 1
         fi
 
@@ -57,11 +57,11 @@ runs:
         esac
 
         ASSET="nimbus_${VERSION}_${OS}_${ARCH}.tar.gz"
-        BASE="https://github.com/nimbus-solution/nimbus/releases/download/v${VERSION}"
+        BASE="https://github.com/renmy-solutions/renmy/releases/download/v${VERSION}"
         DEST="$RUNNER_TEMP/nimbus-${VERSION}"
         mkdir -p "$DEST"
 
-        echo "Downloading nimbus v${VERSION} (${OS}/${ARCH})..."
+        echo "Downloading Renmy v${VERSION} (${OS}/${ARCH})..."
         $CURL -o "$DEST/$ASSET" "$BASE/$ASSET"
         $CURL -o "$DEST/checksums.txt" "$BASE/checksums.txt"
 
@@ -74,11 +74,21 @@ runs:
 
         tar -xzf "$ASSET"
         chmod +x nimbus
+
+        # The nimbus_* archive exists for every release and holds a file named
+        # nimbus. Releases before 1.50.0 know no other name, and the binary
+        # reports itself by the name it is invoked as, so renmy is a symlink
+        # to the same file. A renmy file that came out of the archive stays.
+        if [ ! -e renmy ]; then
+          ln -s nimbus renmy
+        fi
+        chmod +x renmy
+
         echo "$DEST" >> "$GITHUB_PATH"
         echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-        echo "Installed: $("$DEST/nimbus" --version)"
+        echo "Installed: $("$DEST/renmy" --version)"
 
-    - name: Install Nimbus (Windows)
+    - name: Install Renmy (Windows)
       id: install-windows
       if: runner.os == 'Windows'
       shell: pwsh
@@ -89,23 +99,23 @@ runs:
         if ($Version -eq 'latest') {
           # Resolve "latest" from the github.com release redirect rather than
           # the rate-limited api.github.com REST endpoint (see the bash step).
-          $resp = Invoke-WebRequest -Uri 'https://github.com/nimbus-solution/nimbus/releases/latest' -MaximumRetryCount 5 -RetryIntervalSec 2
+          $resp = Invoke-WebRequest -Uri 'https://github.com/renmy-solutions/renmy/releases/latest' -MaximumRetryCount 5 -RetryIntervalSec 2
           $finalUri = $resp.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
           $Version = ($finalUri -split '/tag/')[-1]
         }
         $Version = $Version.TrimStart('v')
         if (-not $Version -or $Version -match '/') {
-          Write-Error "Could not resolve Nimbus version (got '$Version')."
+          Write-Error "Could not resolve Renmy version (got '$Version')."
           exit 1
         }
 
         $Arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'amd64' }
         $Asset = "nimbus_${Version}_windows_${Arch}.zip"
-        $Base = "https://github.com/nimbus-solution/nimbus/releases/download/v${Version}"
+        $Base = "https://github.com/renmy-solutions/renmy/releases/download/v${Version}"
         $Dest = Join-Path $env:RUNNER_TEMP "nimbus-${Version}"
         New-Item -ItemType Directory -Force -Path $Dest | Out-Null
 
-        Write-Host "Downloading nimbus v${Version} (windows/${Arch})..."
+        Write-Host "Downloading Renmy v${Version} (windows/${Arch})..."
         Invoke-WebRequest -Uri "$Base/$Asset" -OutFile (Join-Path $Dest $Asset) -MaximumRetryCount 5 -RetryIntervalSec 2
         Invoke-WebRequest -Uri "$Base/checksums.txt" -OutFile (Join-Path $Dest 'checksums.txt') -MaximumRetryCount 5 -RetryIntervalSec 2
 
@@ -117,6 +127,16 @@ runs:
         }
 
         Expand-Archive -Path (Join-Path $Dest $Asset) -DestinationPath $Dest -Force
+
+        # The nimbus_* archive exists for every release and holds a file named
+        # nimbus.exe. Releases before 1.50.0 know no other name, so renmy.exe
+        # is a copy of the same file. A renmy.exe that came out of the archive
+        # stays.
+        $Renmy = Join-Path $Dest 'renmy.exe'
+        if (-not (Test-Path -LiteralPath $Renmy)) {
+          Copy-Item -LiteralPath (Join-Path $Dest 'nimbus.exe') -Destination $Renmy
+        }
+
         Add-Content -Path $env:GITHUB_PATH -Value $Dest
         Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$Version"
-        & (Join-Path $Dest 'nimbus.exe') --version
+        & $Renmy --version

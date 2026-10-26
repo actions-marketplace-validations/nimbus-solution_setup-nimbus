@@ -22,11 +22,18 @@ jobs:
       - name: Verify install
         shell: bash
         run: |
+          renmy --version
           nimbus --version
           echo "Installed version: ${{ steps.setup.outputs.version }}"
 
+  # 1.1.12 predates the renmy name: its archive holds only nimbus, so this is
+  # the job that proves the action still provides both commands for it.
   test-pinned:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -35,4 +42,7 @@ jobs:
           version: '1.1.12'
 
       - name: Verify pinned version
-        run: nimbus --version | grep -F '1.1.12'
+        shell: bash
+        run: |
+          nimbus --version | grep -F '1.1.12'
+          renmy --version | grep -F '1.1.12'
